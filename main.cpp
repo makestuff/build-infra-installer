@@ -3,6 +3,7 @@
  * kernel32.lib user32.lib ole32.lib shell32.lib advapi32.lib comctl32.lib resource.res
  */
 #include <string>
+#include <cstdlib>
 //#include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -21,160 +22,284 @@
 using namespace std;
 
 // -------------------------------------------------------------------------------------------------
-// Exception class used by everything else.
+// Class & function declarations.
 //
 class InstallerException : public exception {
 	string m_message;
-	void addEmail(ostringstream &s) {
-		s
-			<< ".\n\nPlease report this error, including detailed information about"
-			<< "\nyour Windows installation to prophet3636" << "@" << "gmail.com.";
-	}
+	static void addEmail(ostringstream &s);
 public:
-	InstallerException(const string &message, DWORD retCode, int line) {
-		ostringstream s;
-		s
-			<< message
-			<< " (0x" << hex << uppercase << setw(8) << setfill('0') << retCode << ") at line "
-			<< dec << line;
-		addEmail(s);
-		m_message = s.str();
-	}
-	InstallerException(const string &message, int line) {
-		ostringstream s;
-		s << message << " at line " << line;
-		addEmail(s);
-		m_message = s.str();
-	}
+	InstallerException(const string &message, DWORD retCode, int line);
+	InstallerException(const string &message, int line);
 	~InstallerException() throw() { }
 	const char *what(void) const throw() { return m_message.c_str(); }
 };
-
-// -------------------------------------------------------------------------------------------------
-// Class to simplify navigating the registry.
-//
+class Installer {
+	map<wstring, wstring> m_pyInstalls;
+	vector<pair<wstring, wstring> > m_vsInstalls;
+	int m_vsSelect;
+	void iterPython(HKEY root);
+	static int getMajorVersion(const wchar_t *s);
+public:
+	Installer(void);
+	void selectionChanged(DWORD id, DWORD sel);
+	void makeLink(void) const;
+};
 class RegistryKey {
 	HKEY m_key;
 	typedef LONG (WINAPI *FuncPtr)(HKEY, DWORD, LPWSTR, PDWORD, const void*, const void*, const void*, const void*);
 public:
 	enum EnumType { EnumKeys, EnumValues };
 	RegistryKey(void) : m_key(NULL) { }
-	bool open(HKEY root, const wstring &path) {
-		if ( m_key ) {
-			RegCloseKey(m_key);
-		}
-		DWORD status = RegOpenKeyEx(
-			root,
-			path.c_str(),
-			0,
-			KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS,
-			&m_key
-		);
-		if ( status == ERROR_FILE_NOT_FOUND ) {
-			m_key = NULL;
-			return false;
-		} else if ( status == ERROR_SUCCESS ) {
-			return true;
-		} else {
-			throw InstallerException("RegistryKey::open(): RegOpenKeyEx failed", status, __LINE__);
-		}
+	~RegistryKey(void);
+	bool open(HKEY root, const wstring &path);
+	void enumChildren(EnumType operation, vector<wstring> &children) const;
+	wstring getValueAsString(const wstring &name) const;
+};			
+class ShellLink {
+	IShellLink *m_psl;
+public:
+	ShellLink(void);
+	~ShellLink(void);
+	void createShortcut(
+		const wchar_t *target, const wchar_t *args, const wchar_t *desc, const wchar_t *path
+	) const;
+};
+void createConsoleConfig(const wchar_t *consoleName);
+wstring getDesktopPath(void);
+bool is64(void);
+bool isFilePresent(const wstring &fileName);
+
+// -------------------------------------------------------------------------------------------------
+// InstallerException operations
+//
+InstallerException::InstallerException(const string &message, DWORD retCode, int line) {
+	ostringstream s;
+	s
+		<< message
+		<< " (0x" << hex << uppercase << setw(8) << setfill('0') << retCode << ") at line "
+		<< dec << line;
+	addEmail(s);
+	m_message = s.str();
+}
+InstallerException::InstallerException(const string &message, int line) {
+	ostringstream s;
+	s << message << " at line " << line;
+	addEmail(s);
+	m_message = s.str();
+}
+
+void InstallerException::addEmail(ostringstream &s) {
+    s
+        << ".\n\nPlease report this error, including detailed information about"
+        << "\nyour Windows installation to prophet3636" << "@" << "gmail.com.";
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// RegistryKey operations
+//
+bool RegistryKey::open(HKEY root, const wstring &path) {
+	if ( m_key ) {
+		RegCloseKey(m_key);
 	}
-	~RegistryKey(void) {
-		if ( m_key ) {
-			RegCloseKey(m_key);
-		}
+	DWORD status = RegOpenKeyEx(
+		root,
+		path.c_str(),
+		0,
+		KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS,
+		&m_key
+	);
+	if ( status == ERROR_FILE_NOT_FOUND ) {
+		m_key = NULL;
+		return false;
+	} else if ( status == ERROR_SUCCESS ) {
+		return true;
+	} else {
+		throw InstallerException("RegistryKey::open(): RegOpenKeyEx failed", status, __LINE__);
 	}
-	void enumChildren(EnumType operation, vector<wstring> &children) {
-		wchar_t buf[MAX_PATH];
-		DWORD len = MAX_PATH;
-		DWORD index = 0;
-		DWORD status;
-		FuncPtr func;
-		if ( operation == EnumKeys ) {
-			func = (FuncPtr)&RegEnumKeyEx;
-		} else if ( operation == EnumValues ) {
-			func = (FuncPtr)&RegEnumValue;
-		} else {
-			throw InstallerException("RegistryKey::enumChildren(): Illegal operation", __LINE__);
+}
+RegistryKey::~RegistryKey(void) {
+	if ( m_key ) {
+		RegCloseKey(m_key);
+	}
+}
+void RegistryKey::enumChildren(EnumType operation, vector<wstring> &children) const {
+	wchar_t buf[MAX_PATH];
+	DWORD len = MAX_PATH;
+	DWORD index = 0;
+	DWORD status;
+	FuncPtr func;
+	if ( operation == EnumKeys ) {
+		func = (FuncPtr)&RegEnumKeyEx;
+	} else if ( operation == EnumValues ) {
+		func = (FuncPtr)&RegEnumValue;
+	} else {
+		throw InstallerException("RegistryKey::enumChildren(): Illegal operation", __LINE__);
+	}
+	status = func(
+		m_key,
+		index++,
+		buf, &len,
+		0, NULL, NULL, NULL
+	);
+	while ( status == ERROR_SUCCESS ) {
+		if ( *buf != L'\0' ) {
+			children.push_back(buf);
 		}
+		len = MAX_PATH;
 		status = func(
 			m_key,
 			index++,
 			buf, &len,
 			0, NULL, NULL, NULL
 		);
-		while ( status == ERROR_SUCCESS ) {
-			if ( *buf != L'\0' ) {
-				children.push_back(buf);
-			}
-			len = MAX_PATH;
-			status = func(
-				m_key,
-				index++,
-				buf, &len,
-				0, NULL, NULL, NULL
-			);
-		}
-		if ( status != ERROR_NO_MORE_ITEMS ) {
-			throw InstallerException("RegistryKey::enumChildren(): Registry enumeration failed", status, __LINE__);
-		}
 	}
-	wstring getValueAsString(const wstring &name) {
-		wchar_t buf[MAX_PATH];
-		DWORD len = MAX_PATH;
-		DWORD status = RegQueryValueEx(
-			m_key,
-			name.c_str(),
-			NULL,
-			NULL,
-			(LPBYTE)buf,
-			&len
-		);
-		if ( status != ERROR_SUCCESS ) {
-			throw InstallerException("RegistryKey::getValueAsString(): RegQueryValueEx failed", status, __LINE__);
-		}
-		return buf;
+	if ( status != ERROR_NO_MORE_ITEMS ) {
+		throw InstallerException("RegistryKey::enumChildren(): Registry enumeration failed", status, __LINE__);
 	}
-};			
+}
+wstring RegistryKey::getValueAsString(const wstring &name) const {
+	wchar_t buf[MAX_PATH];
+	DWORD len = MAX_PATH;
+	DWORD status = RegQueryValueEx(
+		m_key,
+		name.c_str(),
+		NULL,
+		NULL,
+		(LPBYTE)buf,
+		&len
+	);
+	if ( status != ERROR_SUCCESS ) {
+		throw InstallerException("RegistryKey::getValueAsString(): RegQueryValueEx failed", status, __LINE__);
+	}
+	return buf;
+}
 
 // -------------------------------------------------------------------------------------------------
-// Class to wrap the IShellLink COM service for creating shortcuts.
+// ShellLink operations
 //
-class ShellLink {
-	IShellLink *m_psl;
-public:
-	ShellLink(void) : m_psl(NULL) {
-		HRESULT hres = CoCreateInstance(
-			CLSID_ShellLink, NULL,
-			CLSCTX_INPROC_SERVER, IID_IShellLink, (void**)&m_psl
-		);
-		if ( !SUCCEEDED(hres) ) {
-			throw InstallerException("ShellLink::ShellLink(): CoCreateInstance failed", __LINE__);
+ShellLink::ShellLink(void) : m_psl(NULL) {
+	HRESULT hres = CoCreateInstance(
+		CLSID_ShellLink, NULL,
+		CLSCTX_INPROC_SERVER, IID_IShellLink, (void**)&m_psl
+	);
+	if ( !SUCCEEDED(hres) ) {
+		throw InstallerException("ShellLink::ShellLink(): CoCreateInstance failed", __LINE__);
+	}
+}
+ShellLink::~ShellLink(void) {
+	if ( m_psl ) {
+		m_psl->Release();
+	}
+}
+void ShellLink::createShortcut(
+	const wchar_t *target, const wchar_t *args, const wchar_t *desc, const wchar_t *path) const
+{
+	IPersistFile *ppf = NULL;
+	m_psl->SetPath(target);
+	m_psl->SetArguments(args);
+	m_psl->SetDescription(desc);
+	HRESULT hres = m_psl->QueryInterface(IID_IPersistFile, (void**)&ppf); 
+	if ( !SUCCEEDED(hres) ) {
+		throw InstallerException("ShellLink::createShortcut(): can't get IPersistFile interface", __LINE__);;
+	}
+	hres = ppf->Save(path, TRUE);
+	ppf->Release();
+	if ( !SUCCEEDED(hres) ) {
+		throw InstallerException("ShellLink::createShortcut(): IPersistFile failed", __LINE__);
+	}
+}
+
+// -------------------------------------------------------------------------------------------------
+// Installer operations
+//
+static const wchar_t *const PY_ROOT = L"Software\\Python\\PythonCore";
+static const wchar_t *const VS_ROOT = L"Software\\Microsoft\\VisualStudio\\SxS\\VS7";
+void Installer::iterPython(HKEY root) {
+	RegistryKey key;
+	if ( key.open(root, PY_ROOT ) ) {
+		RegistryKey installPath;
+		vector<wstring> children;
+		key.enumChildren(RegistryKey::EnumKeys, children);
+		for ( vector<wstring>::const_iterator i = children.begin(); i != children.end(); i++ ) {
+			const wstring &version = *i;
+			wstring installPathName = PY_ROOT;
+			installPathName += L'\\';
+			installPathName += version;
+			installPathName += L"\\InstallPath";
+			if ( installPath.open(root, installPathName ) ) {
+				m_pyInstalls.insert(make_pair(version, installPath.getValueAsString(L"")));
+			}
 		}
 	}
-	~ShellLink(void) {
-		if ( m_psl ) {
-			m_psl->Release();
+}
+int Installer::getMajorVersion(const wchar_t *s) {
+	int result = 0;
+	while ( *s && *s != L'.' ) {
+		result *= 10;
+		result += *s - L'0';
+		s++;
+	}
+	return result;
+}
+Installer::Installer(void) : m_vsSelect(-1) {
+	RegistryKey key;
+	const bool x64 = is64();
+	const wstring baseName = L"Visual Studio ";
+	const wstring baseTarget = L"/c \"";
+	if ( key.open(HKEY_LOCAL_MACHINE, VS_ROOT) ) {
+		vector<wstring> children;
+		key.enumChildren(RegistryKey::EnumValues, children);
+		for ( vector<wstring>::const_iterator i = children.begin(); i != children.end(); i++ ) {
+			const wstring &version = *i;
+			const int majorVersion = getMajorVersion(i->c_str());
+			const wstring thisName = baseName + version;
+			const wstring thisTarget = baseTarget + key.getValueAsString(version);
+			m_vsInstalls.push_back(make_pair(thisName + L" (target: x86)", thisTarget + L"VC\\vcvarsall.bat\" x86&&set MACHINE=x86&&"));
+			if ( x64 && majorVersion > 10 ) {
+				m_vsInstalls.push_back(make_pair(thisName + L" (target: x64)", thisTarget + L"VC\\vcvarsall.bat\" x86_amd64&&set MACHINE=x64&&"));
+			}
 		}
 	}
-	void createShortcut(
-		const wchar_t *target, const wchar_t *args, const wchar_t *desc, const wchar_t *path)
-	{
-		IPersistFile *ppf = NULL;
-		m_psl->SetPath(target);
-		m_psl->SetArguments(args);
-		m_psl->SetDescription(desc);
-		HRESULT hres = m_psl->QueryInterface(IID_IPersistFile, (void**)&ppf); 
-		if ( !SUCCEEDED(hres) ) {
-			throw InstallerException("ShellLink::createShortcut(): can't get IPersistFile interface", __LINE__);;
-		}
-		hres = ppf->Save(path, TRUE);
-		ppf->Release();
-		if ( !SUCCEEDED(hres) ) {
-			throw InstallerException("ShellLink::createShortcut(): IPersistFile failed", __LINE__);
-		}
+	iterPython(HKEY_CURRENT_USER);
+	iterPython(HKEY_LOCAL_MACHINE);
+}
+
+void Installer::selectionChanged(DWORD id, DWORD sel) {
+	switch ( id ) {
+	case IDC_COMPILERLIST:
+		m_vsSelect = (int)sel;
+		break;
+	default:
+		throw InstallerException("Installer::selectionChanged(): unrecognised ID", __LINE__);
 	}
-};
+}
+
+void Installer::makeLink(void) const {
+	const wstring name = L"foo";
+	const wstring path = getDesktopPath() + L"\\" + name + L".lnk";
+	ShellLink shellLink;
+	wstring args;
+	if ( m_vsSelect == -1 ) {
+		// No compiler selected
+		args = L"/k ";
+	} else {
+		// A compiler has been selected
+		const pair<wstring, wstring> &vsChoice = m_vsInstalls[m_vsSelect];
+		args = vsChoice.second;
+	}
+	args += L"C:\\makestuff\\msys\\bin\\bash.exe --login";
+	
+	MessageBox(NULL, args.c_str(), L"Shortcut creation", MB_OK|MB_ICONINFORMATION);
+	
+	shellLink.createShortcut(
+		L"%comspec%",
+		args.c_str(),
+		L"Build x86 code",
+		path.c_str()
+	);
+	createConsoleConfig(name.c_str());
+}
 
 // -------------------------------------------------------------------------------------------------
 // Create a "prettified" console entry in the registry with the given name.
@@ -288,89 +413,12 @@ bool is64(void) {
 bool isFilePresent(const wstring &fileName) {
 	return GetFileAttributes(fileName.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
-
-// -------------------------------------------------------------------------------------------------
-// Class to gather lists of relevant installed software.
-//
-static const wchar_t *const PY_ROOT = L"Software\\Python\\PythonCore";
-static const wchar_t *const VS_ROOT = L"Software\\Microsoft\\VisualStudio\\SxS\\VS7";
-class Installer {
-	map<wstring, wstring> m_pyInstalls;
-	map<wstring, wstring> m_vsInstalls;
-	void iterPython(HKEY root) {
-		RegistryKey key;
-		if ( key.open(root, PY_ROOT ) ) {
-			RegistryKey installPath;
-			vector<wstring> children;
-			key.enumChildren(RegistryKey::EnumKeys, children);
-			for ( vector<wstring>::const_iterator i = children.begin(); i != children.end(); i++ ) {
-				const wstring &version = *i;
-				wstring installPathName = PY_ROOT;
-				installPathName += L'\\';
-				installPathName += version;
-				installPathName += L"\\InstallPath";
-				if ( installPath.open(root, installPathName ) ) {
-					m_pyInstalls.insert(pair<wstring, wstring>(version, installPath.getValueAsString(L"")));
-				}
-			}
-		}
-	}
-public:
-	Installer(void) {
-		RegistryKey key;
-		if ( key.open(HKEY_LOCAL_MACHINE, VS_ROOT) ) {
-			vector<wstring> children;
-			key.enumChildren(RegistryKey::EnumValues, children);
-			for ( vector<wstring>::const_iterator i = children.begin(); i != children.end(); i++ ) {
-				const wstring &version = *i;
-				m_vsInstalls.insert(pair<wstring, wstring>(version, key.getValueAsString(version)));
-			}
-		}
-		iterPython(HKEY_CURRENT_USER);
-		iterPython(HKEY_LOCAL_MACHINE);
-	}
-	void makeLink(void) {
-		if ( !m_vsInstalls.empty() ) {
-			map<wstring, wstring>::const_iterator vsPair = m_vsInstalls.begin();
-			ShellLink shellLink;
-			wstring name = L"\\x86-vs";
-			name += vsPair->first;
-			wstring target = L"/c \"";
-			target += vsPair->second;
-			if ( m_pyInstalls.empty() ) {
-				target += L"VC\\vcvarsall.bat\" x86 && set MACHINE=x86 && C:\\makestuff\\msys\\bin\\bash.exe --login";
-			} else {
-				map<wstring, wstring>::const_iterator pyPair = m_pyInstalls.begin();
-				target += L"VC\\vcvarsall.bat\" x86 && set PATH=";
-				target += pyPair->second;
-				target += L";%PATH% && set MACHINE=x86 && C:\\makestuff\\msys\\bin\\bash.exe --login";
-			}
-			const wstring path = getDesktopPath() + name + L".lnk";
-			shellLink.createShortcut(
-				L"%comspec%",
-				target.c_str(),
-				L"Build x86 code",
-				path.c_str()
-			);
-			createConsoleConfig(name.c_str());
-		}
-	}
-	/*void dump(void) {
-		wcout << L"Visual Studio installations:\n";
-		for ( map<wstring, wstring>::const_iterator it = m_vsInstalls.begin(); it != m_vsInstalls.end(); it++ ) {
-			wcout << L"  " << it->first << L": " << it->second << endl;
-		}
-		wcout << L"Python global installations:" << endl;
-		for ( map<wstring, wstring>::const_iterator it = m_pyInstalls.begin(); it != m_pyInstalls.end(); it++ ) {
-			wcout << L"  " << it->first << L": " << it->second << endl;
-		}
-	}*/
-};
 	
 // -------------------------------------------------------------------------------------------------
 // Callback function that is invoked whenever the user does something.
 //
 INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+	static Installer *installer = NULL;
 	if ( uMsg == WM_COMMAND ) {
 		if ( HIWORD(wParam) == BN_CLICKED ) {
 			switch ( LOWORD(wParam) ) {
@@ -386,6 +434,7 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			ostringstream os;os
 				<< "Dropdown ID " << dropdown
 				<< ": selected index " << selection;
+			installer->selectionChanged(dropdown, selection);
 			MessageBoxA(hwndDlg, os.str().c_str(), "Selection changed", MB_OK|MB_ICONINFORMATION);
 			if ( selection == 1 ) {
 				SendMessage(info, WM_SETTEXT, 0, (LPARAM)L"Goodbye <a href=\"http://makestuff.eu\">world</a>, how are <a href=\"http://sun.com\">you</a> today?");
@@ -409,6 +458,9 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			}
 		}
 	} else if ( uMsg == WM_INITDIALOG ) {
+		// Initialise installer (static)
+		installer = (Installer *)lParam;
+
 		// Set C/C++ Compilers info text
 		HWND child = GetDlgItem(hwndDlg, IDC_COMPILERINFO);
 		SendMessage(child, WM_SETTEXT, 0, (LPARAM)L"Hello <a href=\"http://makestuff.eu\">world</a>, how are <a href=\"http://microsoft.com\">you</a> today?");
@@ -438,41 +490,33 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 int WINAPI WinMain(
 	HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+	int retVal;
+	CoInitialize(NULL);
 	try {
-		int x;
 		INITCOMMONCONTROLSEX icc = {0,};
 		icc.dwSize = sizeof(icc);
 		icc.dwICC = ICC_WIN95_CLASSES | ICC_LINK_CLASS;
 		InitCommonControlsEx(&icc);
+		Installer installer;
 		
-		DialogBox(hInstance, MAKEINTRESOURCE(IDD_MAINDIALOG), NULL, &dialogCallback);
+		// Display the main dialog box
+		DialogBoxParam(
+			hInstance, MAKEINTRESOURCE(IDD_MAINDIALOG), NULL,
+			&dialogCallback, (LPARAM)&installer
+		);
+
+		//installer.dump();
+		installer.makeLink();
 		
 		//MessageBoxA(NULL, "Foo bar", "Quitting...", MB_OK|MB_ICONINFORMATION);
 		
 		(void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
-		return 0;
-	}
-	catch ( const exception &ex ) {
-		MessageBoxA(NULL, ex.what(), "Installation failed!", MB_OK|MB_ICONERROR);
-		return 1;
-	}
-}
-
-/*int main(void) {
-	int retVal;
-	CoInitialize(NULL);
-	try {
-		Installer installer;
-		installer.dump();
-		installer.makeLink();
-		wcout << (is64() ? L"x64" : L"x86") << endl;
-
 		retVal = 0;
 	}
 	catch ( const exception &ex ) {
-		cout << ex.what() << endl;
+		MessageBoxA(NULL, ex.what(), "Installation failed!", MB_OK|MB_ICONERROR);
 		retVal = 1;
 	}
 	CoUninitialize();
 	return retVal;
-}*/
+}
