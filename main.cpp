@@ -1,4 +1,4 @@
-/* rc -nologo resource.rc
+/* rc -nologo resource.rc; \
  * cl -O1 -Os -EHsc -D UNICODE -D _UNICODE -D _WIN32_IE=0x0500 -D WINVER=0x600 -I. -I/c/makestuff/common main.cpp \
  * kernel32.lib user32.lib ole32.lib shell32.lib advapi32.lib comctl32.lib resource.res
  */
@@ -20,6 +20,9 @@
 
 using namespace std;
 
+// -------------------------------------------------------------------------------------------------
+// Exception class used by everything else.
+//
 class InstallerException : public exception {
 	string m_message;
 	void addEmail(ostringstream &s) {
@@ -47,6 +50,9 @@ public:
 	const char *what(void) const throw() { return m_message.c_str(); }
 };
 
+// -------------------------------------------------------------------------------------------------
+// Class to simplify navigating the registry.
+//
 class RegistryKey {
 	HKEY m_key;
 	typedef LONG (WINAPI *FuncPtr)(HKEY, DWORD, LPWSTR, PDWORD, const void*, const void*, const void*, const void*);
@@ -131,6 +137,9 @@ public:
 	}
 };			
 
+// -------------------------------------------------------------------------------------------------
+// Class to wrap the IShellLink COM service for creating shortcuts.
+//
 class ShellLink {
 	IShellLink *m_psl;
 public:
@@ -167,14 +176,9 @@ public:
 	}
 };
 
-wstring getDesktopPath(void) {
-	wchar_t path[MAX_PATH];
-	if ( S_OK != SHGetFolderPath(NULL, CSIDL_DESKTOPDIRECTORY, NULL, SHGFP_TYPE_CURRENT, path) ) {
-		throw InstallerException("getDesktopPath(): Unable to determine the location of your desktop directory", __LINE__);
-	}
-	return path;
-}
-
+// -------------------------------------------------------------------------------------------------
+// Create a "prettified" console entry in the registry with the given name.
+//
 void createConsoleConfig(const wchar_t *consoleName) {
 	struct Value {
 		const wchar_t *name;
@@ -252,6 +256,20 @@ void createConsoleConfig(const wchar_t *consoleName) {
 	}
 }
 
+// -------------------------------------------------------------------------------------------------
+// Get the path to the user's desktop.
+//
+wstring getDesktopPath(void) {
+	wchar_t path[MAX_PATH];
+	if ( S_OK != SHGetFolderPath(NULL, CSIDL_DESKTOPDIRECTORY, NULL, SHGFP_TYPE_CURRENT, path) ) {
+		throw InstallerException("getDesktopPath(): Unable to determine the location of your desktop directory", __LINE__);
+	}
+	return path;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Determine whether this Windows installation is x86 or x64.
+//
 bool is64(void) {
 	wchar_t buf[100];
 	return
@@ -264,9 +282,18 @@ bool is64(void) {
 		buf[5] == L'\0';
 }
 
+// -------------------------------------------------------------------------------------------------
+// Determine whether a file or directory is present or not.
+//
+bool isFilePresent(const wstring &fileName) {
+	return GetFileAttributes(fileName.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Class to gather lists of relevant installed software.
+//
 static const wchar_t *const PY_ROOT = L"Software\\Python\\PythonCore";
 static const wchar_t *const VS_ROOT = L"Software\\Microsoft\\VisualStudio\\SxS\\VS7";
-
 class Installer {
 	map<wstring, wstring> m_pyInstalls;
 	map<wstring, wstring> m_vsInstalls;
@@ -340,6 +367,9 @@ public:
 	}*/
 };
 	
+// -------------------------------------------------------------------------------------------------
+// Callback function that is invoked whenever the user does something.
+//
 INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	if ( uMsg == WM_COMMAND ) {
 		if ( HIWORD(wParam) == BN_CLICKED ) {
@@ -402,7 +432,9 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 	return (INT_PTR)FALSE;
 }
 
-// Our application entry point.
+// -------------------------------------------------------------------------------------------------
+// Application entry point.
+//
 int WINAPI WinMain(
 	HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
