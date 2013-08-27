@@ -3,8 +3,6 @@
  * kernel32.lib user32.lib ole32.lib shell32.lib advapi32.lib comctl32.lib resource.res
  */
 #include <string>
-#include <cstdlib>
-//#include <iostream>
 #include <sstream>
 #include <iomanip>
 #include <vector>
