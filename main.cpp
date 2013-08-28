@@ -31,17 +31,6 @@ public:
 	~InstallerException() throw() { }
 	const char *what(void) const throw() { return m_message.c_str(); }
 };
-class Installer {
-	map<wstring, wstring> m_pyInstalls;
-	vector<pair<wstring, wstring> > m_vsInstalls;
-	int m_vsSelect;
-	void iterPython(HKEY root);
-	static int getMajorVersion(const wchar_t *s);
-public:
-	Installer(void);
-	void selectionChanged(DWORD id, DWORD sel);
-	void makeLink(void) const;
-};
 class RegistryKey {
 	HKEY m_key;
 	typedef LONG (WINAPI *FuncPtr)(HKEY, DWORD, LPWSTR, PDWORD, const void*, const void*, const void*, const void*);
@@ -61,6 +50,35 @@ public:
 	void createShortcut(
 		const wchar_t *target, const wchar_t *args, const wchar_t *desc, const wchar_t *path
 	) const;
+};
+struct VSInstall {
+	const wstring id;
+	const wstring name;
+	const wstring path;
+	VSInstall(const wstring &ci, const wstring &cn, const wstring &cp) :
+		id(ci), name(cn), path(cp) { }
+	VSInstall(const VSInstall &other) :
+		id(other.id), name(other.name), path(other.path) { }
+private:
+	VSInstall &operator=(const VSInstall &other) { }
+};
+class Installer {
+	vector<pair<wstring, wstring>> m_pyInstalls;
+	vector<VSInstall> m_vsInstalls;
+	int m_vsSelect;
+	int m_pySelect;
+	bool m_hdlUseable;
+	wstring m_linkName;
+	static void iterPython(HKEY root, map<wstring, wstring> &pyInstalls);
+	static int getMajorVersion(const wchar_t *str);
+public:
+	Installer(void);
+	void selectionChanged(DWORD id, DWORD sel);
+	void hdlUseable(bool yesno) { m_hdlUseable = yesno; }
+	const wchar_t *getLinkName(void) const;
+	void makeLink(void) const;
+	const vector<VSInstall> &getCompilers(void) const { return m_vsInstalls; }
+	const vector<pair<wstring, wstring>> &getPythons(void) const { return m_pyInstalls; }
 };
 void createConsoleConfig(const wchar_t *consoleName);
 wstring getDesktopPath(void);
@@ -213,7 +231,8 @@ void ShellLink::createShortcut(
 //
 static const wchar_t *const PY_ROOT = L"Software\\Python\\PythonCore";
 static const wchar_t *const VS_ROOT = L"Software\\Microsoft\\VisualStudio\\SxS\\VS7";
-void Installer::iterPython(HKEY root) {
+static const wchar_t *const SDK_ROOT = L"Software\\Microsoft\\Microsoft SDKs\\Windows\\v7.1";
+void Installer::iterPython(HKEY root, map<wstring, wstring> &pyInstalls) {
 	RegistryKey key;
 	if ( key.open(root, PY_ROOT ) ) {
 		RegistryKey installPath;
@@ -226,69 +245,136 @@ void Installer::iterPython(HKEY root) {
 			installPathName += version;
 			installPathName += L"\\InstallPath";
 			if ( installPath.open(root, installPathName ) ) {
-				m_pyInstalls.insert(make_pair(version, installPath.getValueAsString(L"")));
+				pyInstalls.insert(make_pair(version, installPath.getValueAsString(L"")));
 			}
 		}
 	}
 }
-int Installer::getMajorVersion(const wchar_t *s) {
+int Installer::getMajorVersion(const wchar_t *str) {
 	int result = 0;
-	while ( *s && *s != L'.' ) {
+	while ( *str && *str != L'.' ) {
 		result *= 10;
-		result += *s - L'0';
-		s++;
+		result += *str - L'0';
+		str++;
 	}
 	return result;
 }
-Installer::Installer(void) : m_vsSelect(-1) {
+Installer::Installer(void) : m_vsSelect(-1), m_pySelect(-1), m_hdlUseable(false), m_linkName(L"makestuff-base") {
 	RegistryKey key;
 	const bool x64 = is64();
-	const wstring baseName = L"Visual Studio ";
-	const wstring baseTarget = L"/c \"";
+
+	// See if Windows SDK v7.1 is installed
+	if ( key.open(HKEY_LOCAL_MACHINE, SDK_ROOT) ) {
+		wstring target = L"\"";
+		target += key.getValueAsString(L"InstallationFolder");
+		m_vsInstalls.push_back(
+			VSInstall(
+				L"sdk7.1.x86",
+				L"Windows SDK v7.1 C/C++ Compiler (x86)",
+				target + L"Bin\\SetEnv.cmd\" /x86&&set MACHINE=x86&&"
+			)
+		);
+		if ( x64 ) {
+			m_vsInstalls.push_back(
+				VSInstall(
+					L"sdk7.1.x64",
+					L"Windows SDK v7.1 C/C++ Compiler (x64)",
+					target + L"Bin\\SetEnv.cmd\" /x64&&set MACHINE=x64&&"
+				)
+			);
+		}
+	}
+
+	// See which versions (if any) of Visual Studio are installed
 	if ( key.open(HKEY_LOCAL_MACHINE, VS_ROOT) ) {
+		const wstring baseName = L"Visual Studio ";
 		vector<wstring> children;
 		key.enumChildren(RegistryKey::EnumValues, children);
 		for ( vector<wstring>::const_iterator i = children.begin(); i != children.end(); i++ ) {
 			const wstring &version = *i;
 			const int majorVersion = getMajorVersion(i->c_str());
 			const wstring thisName = baseName + version;
-			const wstring thisTarget = baseTarget + key.getValueAsString(version);
-			m_vsInstalls.push_back(make_pair(thisName + L" (target: x86)", thisTarget + L"VC\\vcvarsall.bat\" x86&&set MACHINE=x86&&"));
+			wstring thisTarget = L"\"";
+			thisTarget += key.getValueAsString(version);
+			m_vsInstalls.push_back(
+				VSInstall(
+					L"vs" + version + L".x86",
+					thisName + L" C/C++ Compiler (x86)",
+					thisTarget + L"VC\\vcvarsall.bat\" x86&&set MACHINE=x86&&"
+				)
+			);
 			if ( x64 && majorVersion > 10 ) {
-				m_vsInstalls.push_back(make_pair(thisName + L" (target: x64)", thisTarget + L"VC\\vcvarsall.bat\" x86_amd64&&set MACHINE=x64&&"));
+				// 64-bit compilers are only available after VS2010, and realistically only on Windows x64.
+				m_vsInstalls.push_back(
+					VSInstall(
+						L"vs" + version + L".x64",
+						thisName + L" C/C++ Compiler (x64)",
+						thisTarget + L"VC\\vcvarsall.bat\" x86_amd64&&set MACHINE=x64&&"
+					)
+				);
 			}
 		}
 	}
-	iterPython(HKEY_CURRENT_USER);
-	iterPython(HKEY_LOCAL_MACHINE);
-}
 
+	map<wstring, wstring> pyInstalls;
+	iterPython(HKEY_CURRENT_USER, pyInstalls);
+	iterPython(HKEY_LOCAL_MACHINE, pyInstalls);
+	for ( map<wstring, wstring>::const_iterator i = pyInstalls.begin(); i != pyInstalls.end(); i++ ) {
+		m_pyInstalls.push_back(
+			make_pair(
+				i->first,
+				i->second
+			)
+		);
+	}
+}
 void Installer::selectionChanged(DWORD id, DWORD sel) {
 	switch ( id ) {
 	case IDC_COMPILERLIST:
 		m_vsSelect = (int)sel;
 		break;
+	case IDC_PYTHONLIST:
+		m_pySelect = (int)sel;
+		break;
 	default:
 		throw InstallerException("Installer::selectionChanged(): unrecognised ID", __LINE__);
 	}
+	vector<wstring> components;
+	if ( m_vsSelect != -1 ) {
+		components.push_back(m_vsInstalls[m_vsSelect].id);
+	}
+	if ( m_pySelect != -1 ) {
+		components.push_back(L"py" + m_pyInstalls[m_pySelect].first);
+	}
+	vector<wstring>::const_iterator it = components.begin();
+	m_linkName = *it++;
+	while ( it != components.end() ) {
+		m_linkName += L'-';
+		m_linkName += *it++;
+	}
 }
 
+const wchar_t *Installer::getLinkName(void) const {
+	return m_linkName.c_str();
+}	
+
 void Installer::makeLink(void) const {
-	const wstring name = L"foo";
-	const wstring path = getDesktopPath() + L"\\" + name + L".lnk";
+	const wstring path = getDesktopPath() + L"\\" + m_linkName + L".lnk";
 	ShellLink shellLink;
 	wstring args;
-	if ( m_vsSelect == -1 ) {
-		// No compiler selected
-		args = L"/k ";
-	} else {
+	args = (m_vsSelect == -1) ? L"/k " : L"/c ";
+	if ( m_pySelect != -1 ) {
+		const pair<wstring, wstring> &pyChoice = m_pyInstalls[m_pySelect];
+		args += L"set PATH=" + pyChoice.second + L";%PATH%&&";
+	}
+	if ( m_vsSelect != -1 ) {
 		// A compiler has been selected
-		const pair<wstring, wstring> &vsChoice = m_vsInstalls[m_vsSelect];
-		args = vsChoice.second;
+		const VSInstall &vsChoice = m_vsInstalls[m_vsSelect];
+		args += vsChoice.path;
 	}
 	args += L"C:\\makestuff\\msys\\bin\\bash.exe --login";
 	
-	MessageBox(NULL, args.c_str(), L"Shortcut creation", MB_OK|MB_ICONINFORMATION);
+	//MessageBox(NULL, args.c_str(), L"Shortcut creation", MB_OK|MB_ICONINFORMATION);
 	
 	shellLink.createShortcut(
 		L"%comspec%",
@@ -296,7 +382,7 @@ void Installer::makeLink(void) const {
 		L"Build x86 code",
 		path.c_str()
 	);
-	createConsoleConfig(name.c_str());
+	createConsoleConfig(m_linkName.c_str());
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -320,8 +406,9 @@ void createConsoleConfig(const wchar_t *consoleName) {
 	const DWORD insertMode = 1;
 	const DWORD numberOfHistoryBuffers = 4;
 	const DWORD quickEdit = 1;
-	const DWORD screenBufferSize = 0x12C0082;
-	const DWORD screenColors = 0x1F;
+	const DWORD screenBufferSize = 0x12C0078;
+	const DWORD screenColors = 0x0F;
+	const DWORD colorTable00 = 0x00400000;
 	const DWORD windowSize = 0x280082;
 	const struct Value values[] = {
 		{L"CursorSize",             REG_DWORD, (const BYTE *)&cursorSize,             4},
@@ -336,6 +423,7 @@ void createConsoleConfig(const wchar_t *consoleName) {
 		{L"QuickEdit",              REG_DWORD, (const BYTE *)&quickEdit,              4},
 		{L"ScreenBufferSize",       REG_DWORD, (const BYTE *)&screenBufferSize,       4},
 		{L"ScreenColors",           REG_DWORD, (const BYTE *)&screenColors,           4},
+		{L"ColorTable00",           REG_DWORD, (const BYTE *)&colorTable00,           4},
 		{L"WindowSize",             REG_DWORD, (const BYTE *)&windowSize,             4}
 	};
 	int i;
@@ -411,6 +499,15 @@ bool is64(void) {
 bool isFilePresent(const wstring &fileName) {
 	return GetFileAttributes(fileName.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
+
+// -------------------------------------------------------------------------------------------------
+// Get the canonical grandparent path of the given filename.
+//
+wstring grandParent(const wstring &str) {
+	wchar_t path[MAX_PATH];
+	GetFullPathName((str + L"\\..\\..").c_str(), MAX_PATH, path, NULL);
+	return path;
+}
 	
 // -------------------------------------------------------------------------------------------------
 // Callback function that is invoked whenever the user does something.
@@ -422,6 +519,7 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			switch ( LOWORD(wParam) ) {
 			case IDCANCEL:
 			case IDOK:
+			case IDC_REFRESH:
 				EndDialog(hwndDlg, (INT_PTR)LOWORD(wParam));
 				return (INT_PTR)TRUE;
 			}
@@ -429,17 +527,42 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			const DWORD selection = SendMessage((HWND)lParam, CB_GETCURSEL, NULL, NULL);
 			const DWORD dropdown = LOWORD(wParam);
 			const HWND info = GetDlgItem(hwndDlg, dropdown+1);
-			ostringstream os;os
-				<< "Dropdown ID " << dropdown
-				<< ": selected index " << selection;
+			const HWND linkName = GetDlgItem(hwndDlg, IDC_LINKNAME);
 			installer->selectionChanged(dropdown, selection);
-			MessageBoxA(hwndDlg, os.str().c_str(), "Selection changed", MB_OK|MB_ICONINFORMATION);
-			if ( selection == 1 ) {
-				SendMessage(info, WM_SETTEXT, 0, (LPARAM)L"Goodbye <a href=\"http://makestuff.eu\">world</a>, how are <a href=\"http://sun.com\">you</a> today?");
-				//ShowWindow(GetDlgItem(hwndDlg, IDC_COMPILERINFO), SW_HIDE);
-			} else {
-				SendMessage(info, WM_SETTEXT, 0, (LPARAM)L"Hello <a href=\"http://makestuff.eu\">world</a>, how are <a href=\"http://microsoft.com\">you</a> today?");
-				//ShowWindow(GetDlgItem(hwndDlg, IDC_COMPILERINFO), SW_SHOW);
+			SendMessage(linkName, WM_SETTEXT, 0, (LPARAM)installer->getLinkName());
+			if ( dropdown == IDC_PYTHONLIST ) {
+				const vector<pair<wstring, wstring>> &pyInstalls = installer->getPythons();
+				const pair<wstring, wstring> &pyChoice = pyInstalls[selection];
+				const wstring path = pyChoice.second + L"Lib\\site-packages\\yaml";
+				MessageBox(hwndDlg, path.c_str(), L"Searching", MB_OK|MB_ICONINFORMATION);
+				if ( !isFilePresent(path) ) {
+					const wstring &version = pyChoice.first;
+					installer->hdlUseable(false);
+					if ( version == L"2.7" || (version[0] == L'3' && version[2] >= L'0' && version[2] <= L'2') ) {
+						wstring message =
+							L"To use hdlmake.py, you need PyYAML installed. Install it from "
+							L"<a href=\"http://pyyaml.org/download/pyyaml/PyYAML-3.10.win32-py";
+						message += version;
+						message += L".exe\">here</a>.";
+						SendMessage(
+							info, WM_SETTEXT, 0, (LPARAM)message.c_str()
+						);
+					} else {
+						wstring message =
+							L"To use hdlmake.py, you need "
+							L"<a href=\"http://pyyaml.org\">PyYAML</a> installed. Unfortunately, "
+							L"there is no pre-built installer for Python ";
+						message += version;
+						message +=
+							L". You could try installing it yourself some other way, but the "
+							L"easiest solution is to just choose a different Python version.";
+						SendMessage(
+							info, WM_SETTEXT, 0, (LPARAM)message.c_str()
+						);
+					}
+				} else {
+					installer->hdlUseable(true);
+				}
 			}
 		}
 	} else if ( uMsg == WM_NOTIFY ) {
@@ -448,9 +571,9 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			case NM_CLICK:
 			case NM_RETURN: {
 				const LITEM *item = &link->item;
-				wostringstream os;
-				os << L"Clicked on link[" << item->iLink << L"]: " << item->szUrl;
-				MessageBox(hwndDlg, os.str().c_str(), L"URL click", MB_OK|MB_ICONINFORMATION);
+				//wostringstream os;
+				//os << L"Clicked on link[" << item->iLink << L"]: " << item->szUrl;
+				//MessageBox(hwndDlg, os.str().c_str(), L"URL click", MB_OK|MB_ICONINFORMATION);
 				ShellExecute(NULL, L"open", item->szUrl, NULL, NULL, SW_SHOW);
 				break;
 			}
@@ -458,25 +581,71 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 	} else if ( uMsg == WM_INITDIALOG ) {
 		// Initialise installer (static)
 		installer = (Installer *)lParam;
+		const vector<VSInstall> &vsInstalls = installer->getCompilers();
+		const vector<pair<wstring, wstring>> &pyInstalls = installer->getPythons();
+		const HWND vsList = GetDlgItem(hwndDlg, IDC_COMPILERLIST);
+		const HWND vsInfo = GetDlgItem(hwndDlg, IDC_COMPILERINFO);
+		const HWND pyList = GetDlgItem(hwndDlg, IDC_PYTHONLIST);
+		const HWND pyInfo = GetDlgItem(hwndDlg, IDC_PYTHONINFO);
+		const HWND linkName = GetDlgItem(hwndDlg, IDC_LINKNAME);
+		SendMessage(linkName, WM_SETTEXT, 0, (LPARAM)installer->getLinkName());
 
-		// Set C/C++ Compilers info text
-		HWND child = GetDlgItem(hwndDlg, IDC_COMPILERINFO);
-		SendMessage(child, WM_SETTEXT, 0, (LPARAM)L"Hello <a href=\"http://makestuff.eu\">world</a>, how are <a href=\"http://microsoft.com\">you</a> today?");
+		// Reset combo-boxes
+		//SendMessage(vsList, CB_RESETCONTENT, 0, 0);
+		//SendMessage(pyList, CB_RESETCONTENT, 0, 0);
 
 		// Populate C/C++ Compilers list
-		child = GetDlgItem(hwndDlg, IDC_COMPILERLIST);
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Visual Studio 11.0 x86");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Visual Studio 11.0 x64");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Visual Studio 12.0 x86");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Visual Studio 12.0 x64");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Windows SDK 7.1 x86");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"Windows SDK 7.1 x64");
+		if ( vsInstalls.empty() ) {
+			//ShowWindow(child, SW_SHOW);
+			SendMessage(
+				vsInfo, WM_SETTEXT, 0, (LPARAM)
+				L"You have no MSVC compilers installed. Install Visual Studio "
+				L"<a href=\"http://go.microsoft.com/?linkid=7729279\">2008</a>, "
+				L"<a href=\"http://go.microsoft.com/?linkid=9709949\">2010</a>, "
+				L"<a href=\"http://go.microsoft.com/?linkid=9816758\">2012</a> or "
+				L"<a href=\"http://go.microsoft.com/?linkid=9833050\">2013</a>. "
+				L"Alternatively, if you don't need the IDE, just install "
+				L"<a href=\"http://download.microsoft.com/download/A/6/A/A6AC035D-DA3F-4F0C-ADA4-37C8E5D34E3D/winsdk_web.exe\">SDK 7.1</a>."
+			);
+		} else {
+			//ShowWindow(child, SW_HIDE);
+			SendMessage(vsInfo, WM_SETTEXT, 0, (LPARAM)L"Select the MSVC compiler you wish to use.");
+			for ( vector<VSInstall>::const_iterator i = vsInstalls.begin(); i != vsInstalls.end(); i++ ) {
+				SendMessage(vsList, CB_ADDSTRING, 0, (LPARAM)i->name.c_str());
+			}
+		}
 
 		// Populate Python Interpreters list
-		child = GetDlgItem(hwndDlg, IDC_PYTHONLIST);
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"C:\\Python27");
-		SendMessage(child, CB_ADDSTRING, 0, (LPARAM)L"C:\\Python32");
-
+		const bool x64 = is64();
+		if ( pyInstalls.empty() ) {
+			//ShowWindow(child, SW_SHOW);
+			if ( x64 ) {
+				SendMessage(
+					pyInfo, WM_SETTEXT, 0, (LPARAM)
+					L"No Python interpreters installed. Get Python 2.7 ("
+					L"<a href=\"http://www.python.org/ftp/python/2.7.5/python-2.7.5.amd64.msi\">x64</a> or "
+					L"<a href=\"http://www.python.org/ftp/python/2.7.5/python-2.7.5.msi\">x86</a>), or 3.2 ("
+					L"<a href=\"http://www.python.org/ftp/python/3.2.5/python-3.2.5.amd64.msi\">x64</a> or "
+					L"<a href=\"http://www.python.org/ftp/python/3.2.5/python-3.2.5.msi\">x86</a>). "
+					L"Install \"for just me\" rather than \"for all users\" to avoid "
+					L"<a href=\"http://stackoverflow.com/a/7170483/2694208\">this PyYAML installer bug</a>."
+				);
+			} else {
+				SendMessage(
+					pyInfo, WM_SETTEXT, 0, (LPARAM)
+					L"You have no Python interpreters installed. Install "
+					L"<a href=\"http://www.python.org/ftp/python/2.7.5/python-2.7.5.msi\">Python 2.7</a> or "
+					L"<a href=\"http://www.python.org/ftp/python/3.2.5/python-3.2.5.msi\">Python 3.2</a>."
+				);
+			}
+		} else {
+			//ShowWindow(child, SW_HIDE);
+			const wstring baseItem = L"Python ";
+			SendMessage(pyInfo, WM_SETTEXT, 0, (LPARAM)L"Select the Python interpreter you wish to use.");
+			for ( vector<pair<wstring, wstring>>::const_iterator i = pyInstalls.begin(); i != pyInstalls.end(); i++ ) {
+				SendMessage(pyList, CB_ADDSTRING, 0, (LPARAM)(baseItem + i->first).c_str());
+			}
+		}
 		return (INT_PTR)TRUE;
 	}
 	return (INT_PTR)FALSE;
@@ -488,26 +657,26 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 int WINAPI WinMain(
 	HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-	int retVal;
+	DWORD retVal;
 	CoInitialize(NULL);
 	try {
 		INITCOMMONCONTROLSEX icc = {0,};
 		icc.dwSize = sizeof(icc);
 		icc.dwICC = ICC_WIN95_CLASSES | ICC_LINK_CLASS;
 		InitCommonControlsEx(&icc);
-		Installer installer;
-		
-		// Display the main dialog box
-		DialogBoxParam(
-			hInstance, MAKEINTRESOURCE(IDD_MAINDIALOG), NULL,
-			&dialogCallback, (LPARAM)&installer
-		);
 
-		//installer.dump();
-		installer.makeLink();
-		
-		//MessageBoxA(NULL, "Foo bar", "Quitting...", MB_OK|MB_ICONINFORMATION);
-		
+		do {
+			Installer installer;
+			retVal = DialogBoxParam(
+				hInstance, MAKEINTRESOURCE(IDD_MAINDIALOG), NULL,
+				&dialogCallback, (LPARAM)&installer
+			);
+			if ( retVal ==IDOK ) {
+				installer.makeLink();
+				break;
+			}
+		} while ( retVal == IDC_REFRESH );
+
 		(void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
 		retVal = 0;
 	}

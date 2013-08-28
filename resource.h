@@ -7,5 +7,7 @@
 #define IDC_COMPILERINFO                        231
 #define IDC_PYTHONLIST                          232
 #define IDC_PYTHONINFO                          233
-#define IDC_LINKNAME                            234
-#define IDC_REFRESH                             235
+#define IDC_XILINXLIST                          234
+#define IDC_XILINXINFO                          235
+#define IDC_LINKNAME                            236
+#define IDC_REFRESH                             237
