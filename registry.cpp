@@ -79,7 +79,6 @@ wstring RegistryKey::getValueAsString(const wstring &name) const {
 }
 bool RegistryKey::getValueAsString(wchar_t *path, wstring &result) const {
 	wchar_t *ptr = path;
-	bool retVal;
 	while ( *ptr && *ptr != L'\\' ) {
 		ptr++;
 	}

@@ -12,7 +12,7 @@ struct VSInstall {
 	VSInstall(const VSInstall &other) :
 		id(other.id), name(other.name), path(other.path) { }
 private:
-	VSInstall &operator=(const VSInstall &other) { }
+	VSInstall &operator=(const VSInstall &other) { (void)other; }
 };
 
 #endif
