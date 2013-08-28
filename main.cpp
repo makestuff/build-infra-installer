@@ -125,10 +125,9 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 		}
 
 		// Populate Python Interpreters list
-		const bool x64 = is64();
 		if ( pyInstalls.empty() ) {
 			//ShowWindow(child, SW_SHOW);
-			if ( x64 ) {
+			if ( installer->is64() ) {
 				SendMessage(
 					pyInfo, WM_SETTEXT, 0, (LPARAM)
 					L"No Python interpreters installed. Get Python 2.7 ("

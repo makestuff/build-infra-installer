@@ -38,12 +38,24 @@ int Installer::getMajorVersion(const wchar_t *str) {
 	}
 	return result;
 }
+// Determine whether this Windows installation is x86 or x64.
+bool Installer::det64(void) {
+	wchar_t buf[100];
+	return
+		GetEnvironmentVariable(L"PROCESSOR_ARCHITEW6432", buf, 100) == 5 &&
+		buf[0] == L'A' &&
+		buf[1] == L'M' &&
+		buf[2] == L'D' &&
+		buf[3] == L'6' &&
+		buf[4] == L'4' &&
+		buf[5] == L'\0';
+}
+
 Installer::Installer(void) :
-	m_vsSelect(-1), m_pySelect(-1), m_iseSelect(-1),
+	m_vsSelect(-1), m_pySelect(-1), m_iseSelect(-1), m_x64(det64()),
 	m_hdlUseable(false), m_linkName(L"makestuff-base")
 {
 	RegistryKey key;
-	const bool x64 = is64();
 
 	// See if Windows SDK v7.1 is installed
 	if ( key.open(HKEY_LOCAL_MACHINE, SDK_ROOT) ) {
@@ -56,7 +68,7 @@ Installer::Installer(void) :
 				target + L"Bin\\SetEnv.cmd\" /x86&&set MACHINE=x86&&"
 			)
 		);
-		if ( x64 ) {
+		if ( m_x64 ) {
 			m_vsInstalls.push_back(
 				VSInstall(
 					L"sdk7.1.x64",
@@ -85,7 +97,7 @@ Installer::Installer(void) :
 					thisTarget + L"VC\\vcvarsall.bat\" x86&&set MACHINE=x86&&"
 				)
 			);
-			if ( x64 && majorVersion > 10 ) {
+			if ( m_x64 && majorVersion > 10 ) {
 				// 64-bit compilers are only available after VS2010, and realistically only on Windows x64.
 				m_vsInstalls.push_back(
 					VSInstall(
@@ -124,7 +136,7 @@ Installer::Installer(void) :
 					version +
 					L"\\Project Navigator\\Project Manager\\Preferences\\PlanAheadBinDirUserVal"
 				)
-			) + (x64 ? L"\\ISE\\bin\\nt64" : L"\\ISE\\bin\\nt");
+			) + (m_x64 ? L"\\ISE\\bin\\nt64" : L"\\ISE\\bin\\nt");
 			MessageBox(NULL, thisTarget.c_str(), L"ISE", MB_OK|MB_ICONINFORMATION);
 			m_iseInstalls.push_back(
 				make_pair(version, thisTarget)
@@ -188,7 +200,7 @@ void Installer::makeLink(void) const {
 	const wstring path = getDesktopPath() + L"\\" + m_linkName + L".lnk";
 	ShellLink shellLink;
 	wstring args;
-	args = (m_vsSelect == -1) ? L"/k " : L"/c ";
+	args = m_x64 ? L"/c set HOSTTYPE=x64&&" : L"/c set HOSTTYPE=x86&&";
 	if ( m_pySelect != -1 ) {
 		const pair<wstring, wstring> &pyChoice = m_pyInstalls[m_pySelect];
 		args += L"set PATH=" + pyChoice.second;
