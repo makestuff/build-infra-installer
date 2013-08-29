@@ -12,5 +12,5 @@ Build it with an x86 MSVC compiler like this:
 
 rc -nologo resource.rc; \
 cl -O1 -Os -EHsc -D UNICODE -D _UNICODE -D _WIN32_IE=0x0500 -D WINVER=0x600 \
-  -I. -Feinstaller *.cpp kernel32.lib user32.lib ole32.lib shell32.lib \
+  -I. -Fesetup *.cpp kernel32.lib user32.lib ole32.lib shell32.lib \
   advapi32.lib comctl32.lib resource.res
