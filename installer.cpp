@@ -168,7 +168,6 @@ Installer::Installer(void) :
 					L"\\Project Navigator\\Project Manager\\Preferences\\PlanAheadBinDirUserVal"
 				)
 			) + (m_x64 ? L"\\ISE\\bin\\nt64" : L"\\ISE\\bin\\nt");
-			MessageBox(NULL, thisTarget.c_str(), L"ISE", MB_OK|MB_ICONINFORMATION);
 			m_iseInstalls.push_back(
 				make_pair(version, thisTarget)
 			);
