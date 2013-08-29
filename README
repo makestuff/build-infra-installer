@@ -1,0 +1,16 @@
+--------------- WIN32 INSTALLER FOR MAKESTUFF BUILD ENVIRONMENT ----------------
+
+This just simplifies the process of creating a desktop shortcut containing the
+correct settings for PATH, MACHINE and HOSTTYPE, by allowing the user to choose
+from the available C/C++ compilers, Python installations and Xilinx ISE
+installations. It also writes a console record to the registry so the resulting
+console has sensible defaults for size, font and other settings. It won't make
+any attempt to actually install any software, but it will make suggestions and
+provide download links for software it thinks the user should install.
+
+Build it with an x86 MSVC compiler like this:
+
+rc -nologo resource.rc; \
+cl -O1 -Os -EHsc -D UNICODE -D _UNICODE -D _WIN32_IE=0x0500 -D WINVER=0x600 \
+  -I. -Femain *.cpp kernel32.lib user32.lib ole32.lib shell32.lib advapi32.lib \
+  comctl32.lib resource.res

@@ -1,3 +1,22 @@
+/* 
+ * Copyright (C) 2013 Chris McClelland
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *  
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+#include <vector>
+#include <string>
 #include "installer.h"
 #include "registry.h"
 #include "exception.h"
@@ -7,10 +26,15 @@
 
 using namespace std;
 
+// Registry path constants
+//
 static const wchar_t *const PY_ROOT = L"Software\\Python\\PythonCore";
 static const wchar_t *const VS_ROOT = L"Software\\Microsoft\\VisualStudio\\SxS\\VS7";
 static const wchar_t *const SDK_ROOT = L"Software\\Microsoft\\Microsoft SDKs\\Windows\\v7.1";
 static const wchar_t *const ISE_ROOT = L"Software\\Xilinx\\ISE";
+
+// Add Python installations at the given root to the supplied map.
+//
 void Installer::iterPython(HKEY root, map<wstring, wstring> &pyInstalls) {
 	RegistryKey key;
 	if ( key.open(root, PY_ROOT ) ) {
@@ -29,6 +53,9 @@ void Installer::iterPython(HKEY root, map<wstring, wstring> &pyInstalls) {
 		}
 	}
 }
+
+// Extract the major version from the supplied MAJ.MIN string.
+//
 int Installer::getMajorVersion(const wchar_t *str) {
 	int result = 0;
 	while ( *str && *str != L'.' ) {
@@ -38,7 +65,9 @@ int Installer::getMajorVersion(const wchar_t *str) {
 	}
 	return result;
 }
+
 // Determine whether this Windows installation is x86 or x64.
+//
 bool Installer::det64(void) {
 	wchar_t buf[100];
 	return
@@ -51,6 +80,8 @@ bool Installer::det64(void) {
 		buf[5] == L'\0';
 }
 
+// Populate the lists of installed software for display in the drop-downs.
+//
 Installer::Installer(void) :
 	m_vsSelect(-1), m_pySelect(-1), m_iseSelect(-1), m_x64(det64()),
 	m_hdlUseable(false), m_linkName(L"makestuff-base")
@@ -141,25 +172,13 @@ Installer::Installer(void) :
 			m_iseInstalls.push_back(
 				make_pair(version, thisTarget)
 			);
-			//	VSInstall(
-			//		L"vs" + version + L".x86",
-			//		thisName + L" C/C++ Compiler (x86)",
-			//		thisTarget + L"VC\\vcvarsall.bat\" x86&&set MACHINE=x86&&"
-			//	)
-			//);
-			//if ( x64 && majorVersion > 10 ) {
-			//	// 64-bit compilers are only available after VS2010, and realistically only on Windows x64.
-			//	m_vsInstalls.push_back(
-			//		VSInstall(
-			//			L"vs" + version + L".x64",
-			//			thisName + L" C/C++ Compiler (x64)",
-			//			thisTarget + L"VC\\vcvarsall.bat\" x86_amd64&&set MACHINE=x64&&"
-			//		)
-			//	);
-			//}
 		}
 	}
 }
+
+// Called whenever the user changes the selection in a drop-down. Sets the numeric
+// indices and also regenerates the name to be used for the desktop shortcut.
+//
 void Installer::selectionChanged(DWORD id, DWORD sel) {
 	switch ( id ) {
 	case IDC_COMPILERLIST:
@@ -172,7 +191,7 @@ void Installer::selectionChanged(DWORD id, DWORD sel) {
 		m_iseSelect = (int)sel;
 		break;
 	default:
-		throw InstallerException("Installer::selectionChanged(): unrecognised ID", __LINE__);
+		throw InstallerException("Installer::selectionChanged(): unrecognised ID", __FILE__, __LINE__);
 	}
 	vector<wstring> components;
 	if ( m_vsSelect != -1 ) {
@@ -192,10 +211,14 @@ void Installer::selectionChanged(DWORD id, DWORD sel) {
 	}
 }
 
+// Returns the current name for the desktop shortcut.
+//
 const wchar_t *Installer::getLinkName(void) const {
 	return m_linkName.c_str();
 }	
 
+// Actually make the desktop shortcut, using information gathered from the user.
+//
 void Installer::makeLink(void) const {
 	const wstring path = getDesktopPath() + L"\\" + m_linkName + L".lnk";
 	ShellLink shellLink;
@@ -218,9 +241,6 @@ void Installer::makeLink(void) const {
 		args += vsChoice.path;
 	}
 	args += L"C:\\makestuff\\msys\\bin\\bash.exe --login";
-	
-	//MessageBox(NULL, args.c_str(), L"Shortcut creation", MB_OK|MB_ICONINFORMATION);
-	
 	shellLink.createShortcut(
 		L"%comspec%",
 		args.c_str(),
