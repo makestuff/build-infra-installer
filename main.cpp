@@ -40,9 +40,16 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			if ( dropdown == IDC_PYTHONLIST ) {
 				const vector<pair<wstring, wstring>> &pyInstalls = installer->getPythonList();
 				const pair<wstring, wstring> &pyChoice = pyInstalls[selection];
-				const wstring path = pyChoice.second + L"Lib\\site-packages\\yaml";
-				MessageBox(hwndDlg, path.c_str(), L"Searching", MB_OK|MB_ICONINFORMATION);
-				if ( !isFilePresent(path) ) {
+				const wstring yamlPath = pyChoice.second + L"Lib\\site-packages\\yaml";
+				if ( isFilePresent(yamlPath) ) {
+					// Selected Python version has PyYAML installed
+					installer->hdlUseable(true);
+					SendMessage(
+						info, WM_SETTEXT, 0, (LPARAM)
+						L"Found PyYAML installed. Looking good!"
+					);
+				} else {
+					// Selected Python version does not have PyYAML installed
 					const wstring &version = pyChoice.first;
 					installer->hdlUseable(false);
 					if ( version == L"2.7" || (version[0] == L'3' && version[2] >= L'0' && version[2] <= L'2') ) {
@@ -51,6 +58,13 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 							L"<a href=\"http://pyyaml.org/download/pyyaml/PyYAML-3.10.win32-py";
 						message += version;
 						message += L".exe\">here</a>.";
+						SendMessage(
+							info, WM_SETTEXT, 0, (LPARAM)message.c_str()
+						);
+					} else if ( version[0] == L'2' && version[2] < L'7' ) {
+						wstring message = L"Unfortunately, hdlmake.py does not support Python ";
+						message += version;
+						message += L"; you should install a more recent Python interpreter.";
 						SendMessage(
 							info, WM_SETTEXT, 0, (LPARAM)message.c_str()
 						);
@@ -67,9 +81,13 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 							info, WM_SETTEXT, 0, (LPARAM)message.c_str()
 						);
 					}
-				} else {
-					installer->hdlUseable(true);
 				}
+			} else if ( dropdown == IDC_XILINXLIST ) {
+				const HWND iseInfo = GetDlgItem(hwndDlg, IDC_XILINXINFO);
+				SendMessage(iseInfo, WM_SETTEXT, 0, (LPARAM)L"Looking good!");
+			} else if ( dropdown == IDC_COMPILERLIST ) {
+				const HWND vsInfo = GetDlgItem(hwndDlg, IDC_COMPILERINFO);
+				SendMessage(vsInfo, WM_SETTEXT, 0, (LPARAM)L"Looking good!");
 			}
 		}
 	} else if ( uMsg == WM_NOTIFY ) {
@@ -78,9 +96,6 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 			case NM_CLICK:
 			case NM_RETURN: {
 				const LITEM *item = &link->item;
-				//wostringstream os;
-				//os << L"Clicked on link[" << item->iLink << L"]: " << item->szUrl;
-				//MessageBox(hwndDlg, os.str().c_str(), L"URL click", MB_OK|MB_ICONINFORMATION);
 				ShellExecute(NULL, L"open", item->szUrl, NULL, NULL, SW_SHOW);
 				break;
 			}
@@ -96,16 +111,14 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 		const HWND pyList = GetDlgItem(hwndDlg, IDC_PYTHONLIST);
 		const HWND pyInfo = GetDlgItem(hwndDlg, IDC_PYTHONINFO);
 		const HWND iseList = GetDlgItem(hwndDlg, IDC_XILINXLIST);
+		const HWND iseInfo = GetDlgItem(hwndDlg, IDC_XILINXINFO);
 		const HWND linkName = GetDlgItem(hwndDlg, IDC_LINKNAME);
-		SendMessage(linkName, WM_SETTEXT, 0, (LPARAM)installer->getLinkName());
 
-		// Reset combo-boxes
-		//SendMessage(vsList, CB_RESETCONTENT, 0, 0);
-		//SendMessage(pyList, CB_RESETCONTENT, 0, 0);
+		// Set the default link name
+		SendMessage(linkName, WM_SETTEXT, 0, (LPARAM)installer->getLinkName());
 
 		// Populate C/C++ Compilers list
 		if ( vsInstalls.empty() ) {
-			//ShowWindow(child, SW_SHOW);
 			SendMessage(
 				vsInfo, WM_SETTEXT, 0, (LPARAM)
 				L"You have no MSVC compilers installed. Install Visual Studio "
@@ -117,7 +130,6 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				L"<a href=\"http://download.microsoft.com/download/A/6/A/A6AC035D-DA3F-4F0C-ADA4-37C8E5D34E3D/winsdk_web.exe\">SDK 7.1</a>."
 			);
 		} else {
-			//ShowWindow(child, SW_HIDE);
 			SendMessage(vsInfo, WM_SETTEXT, 0, (LPARAM)L"Select the MSVC compiler you wish to use.");
 			for ( vector<VSInstall>::const_iterator i = vsInstalls.begin(); i != vsInstalls.end(); i++ ) {
 				SendMessage(vsList, CB_ADDSTRING, 0, (LPARAM)i->name.c_str());
@@ -126,7 +138,6 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 
 		// Populate Python Interpreters list
 		if ( pyInstalls.empty() ) {
-			//ShowWindow(child, SW_SHOW);
 			if ( installer->is64() ) {
 				SendMessage(
 					pyInfo, WM_SETTEXT, 0, (LPARAM)
@@ -147,20 +158,26 @@ INT_PTR CALLBACK dialogCallback(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM l
 				);
 			}
 		} else {
-			//ShowWindow(child, SW_HIDE);
 			const wstring baseItem = L"Python ";
-			SendMessage(pyInfo, WM_SETTEXT, 0, (LPARAM)L"Select the Python interpreter you wish to use.");
 			for ( vector<pair<wstring, wstring>>::const_iterator i = pyInstalls.begin(); i != pyInstalls.end(); i++ ) {
 				SendMessage(pyList, CB_ADDSTRING, 0, (LPARAM)(baseItem + i->first).c_str());
 			}
+			SendMessage(pyInfo, WM_SETTEXT, 0, (LPARAM)L"Select the Python interpreter you wish to use.");
 		}
 
 		// Populate ISE list
-		if ( !iseInstalls.empty() ) {
+		if ( iseInstalls.empty() ) {
+			SendMessage(
+				iseInfo, WM_SETTEXT, 0, (LPARAM)
+				L"You have no Xilinx ISE installations. You can get it "
+				L"<a href=\"http://www.xilinx.com/support/download.html\">from the Xilinx website</a>."
+			);
+		} else {
 			const wstring baseItem = L"Xilinx ISE ";
 			for ( vector<pair<wstring, wstring>>::const_iterator i = iseInstalls.begin(); i != iseInstalls.end(); i++ ) {
 				SendMessage(iseList, CB_ADDSTRING, 0, (LPARAM)(baseItem + i->first).c_str());
 			}
+			SendMessage(iseInfo, WM_SETTEXT, 0, (LPARAM)L"Select the Xilinx ISE version you wish to use.");
 		}
 		return (INT_PTR)TRUE;
 	}
